@@ -1,0 +1,16 @@
+version: '3.8'
+
+services:
+  nextjs-board:
+    build: .
+    ports:
+      - "3000:3000"
+    environment:
+      - NODE_ENV=production
+    volumes:
+      - .:/app
+      - /app/node_modules
+      - /app/.next
+      - ./data:/app/data  # SQLite 데이터베이스 파일 영구 저장
+    command: npm run dev
+    restart: unless-stopped
