@@ -6,15 +6,60 @@ import {
   useQuery,
   useMutation,
   gql,
+  createHttpLink,
 } from "@apollo/client";
+import { setContext } from "@apollo/client/link/context";
 
-// Apollo Client 설정
-const client = new ApolloClient({
-  uri: "/api/graphql",
-  cache: new InMemoryCache(),
-});
+// 타입 정의
+interface User {
+  id: string;
+  email: string;
+  username: string;
+  isVerified: boolean;
+}
 
-// 간단한 로고 SVG 컴포넌트
+interface Post {
+  id: string;
+  title: string;
+  content: string;
+  authorId: string;
+  authorUsername: string;
+  createdAt: string;
+}
+
+// Apollo Client 설정 함수
+const createApolloClient = (token?: string) => {
+  const httpLink = createHttpLink({
+    uri: "/api/graphql",
+  });
+
+  const authLink = setContext((_, { headers }) => {
+    return {
+      headers: {
+        ...headers,
+        authorization: token ? `Bearer ${token}` : "",
+      },
+    };
+  });
+
+  return new ApolloClient({
+    link: authLink.concat(httpLink),
+    cache: new InMemoryCache(),
+    defaultOptions: {
+      watchQuery: {
+        errorPolicy: "all",
+      },
+      query: {
+        errorPolicy: "all",
+      },
+    },
+  });
+};
+
+// 초기 클라이언트 생성
+let client = createApolloClient();
+
+// 로고 컴포넌트
 const Logo = () => (
   <div className="logo">
     <svg
@@ -47,26 +92,64 @@ const Logo = () => (
   </div>
 );
 
-// GraphQL 쿼리와 뮤테이션
+// GraphQL 쿼리 및 뮤테이션
+const GET_ME = gql`
+  query GetMe {
+    me {
+      id
+      email
+      username
+      isVerified
+    }
+  }
+`;
+
 const GET_POSTS = gql`
   query GetPosts {
     posts {
       id
       title
       content
-      author
+      authorId
+      authorUsername
       createdAt
     }
   }
 `;
 
-const ADD_POST = gql`
-  mutation AddPost($title: String!, $content: String!, $author: String!) {
-    addPost(title: $title, content: $content, author: $author) {
+const REGISTER = gql`
+  mutation Register($email: String!, $username: String!, $password: String!) {
+    register(email: $email, username: $username, password: $password) {
+      success
+      message
+      emailSent
+    }
+  }
+`;
+
+const LOGIN = gql`
+  mutation Login($email: String!, $password: String!) {
+    login(email: $email, password: $password) {
+      accessToken
+      refreshToken
+      user {
+        id
+        email
+        username
+        isVerified
+      }
+    }
+  }
+`;
+
+const CREATE_POST = gql`
+  mutation CreatePost($title: String!, $content: String!) {
+    createPost(title: $title, content: $content) {
       id
       title
       content
-      author
+      authorId
+      authorUsername
       createdAt
     }
   }
@@ -78,144 +161,467 @@ const DELETE_POST = gql`
   }
 `;
 
-// 게시글 컴포넌트
-function PostList() {
-  const { loading, error, data, refetch } = useQuery(GET_POSTS);
-  const [addPost] = useMutation(ADD_POST);
-  const [deletePost] = useMutation(DELETE_POST);
-  const [showForm, setShowForm] = useState(false);
-  const [formData, setFormData] = useState({
-    title: "",
-    content: "",
-    author: "",
+const LOGOUT = gql`
+  mutation Logout {
+    logout
+  }
+`;
+
+// 메인 앱 컴포넌트
+function BoardApp() {
+  // 상태 관리
+  const [user, setUser] = useState<User | null>(null);
+  const [accessToken, setAccessToken] = useState<string>("");
+  const [showAuthForm, setShowAuthForm] = useState<boolean>(false);
+  const [authMode, setAuthMode] = useState<"login" | "register">("login");
+  const [showPostForm, setShowPostForm] = useState<boolean>(false);
+  const [apolloClient, setApolloClient] = useState(() => createApolloClient());
+
+  // 폼 상태
+  const [authForm, setAuthForm] = useState({
+    email: "",
+    username: "",
+    password: "",
   });
 
-  const handleSubmit = async (e: React.FormEvent) => {
+  const [postForm, setPostForm] = useState({
+    title: "",
+    content: "",
+  });
+
+  // GraphQL 훅
+  const { data: userData, refetch: refetchUser } = useQuery(GET_ME, {
+    skip: !accessToken,
+    client: apolloClient,
+  });
+
+  const {
+    data: postsData,
+    loading: postsLoading,
+    refetch: refetchPosts,
+  } = useQuery(GET_POSTS, {
+    client: apolloClient,
+  });
+
+  const [register, { loading: registerLoading }] = useMutation(REGISTER, {
+    client: apolloClient,
+  });
+  const [login, { loading: loginLoading }] = useMutation(LOGIN, {
+    client: apolloClient,
+  });
+  const [createPostMutation, { loading: createPostLoading }] = useMutation(
+    CREATE_POST,
+    { client: apolloClient }
+  );
+  const [deletePostMutation] = useMutation(DELETE_POST, {
+    client: apolloClient,
+  });
+  const [logoutMutation] = useMutation(LOGOUT, { client: apolloClient });
+
+  // 로컬 스토리지에서 토큰 복원
+  useEffect(() => {
+    const savedToken = localStorage.getItem("accessToken");
+    const savedUser = localStorage.getItem("user");
+
+    if (savedToken && savedUser) {
+      setAccessToken(savedToken);
+      setUser(JSON.parse(savedUser));
+
+      // Apollo Client 업데이트 (토큰 포함)
+      setApolloClient(createApolloClient(savedToken));
+    }
+  }, []);
+
+  // 토큰 변경시 Apollo Client 업데이트
+  useEffect(() => {
+    if (accessToken) {
+      setApolloClient(createApolloClient(accessToken));
+    } else {
+      setApolloClient(createApolloClient());
+    }
+  }, [accessToken]);
+
+  // 사용자 데이터 업데이트
+  useEffect(() => {
+    if (userData?.me) {
+      setUser(userData.me);
+      localStorage.setItem("user", JSON.stringify(userData.me));
+    }
+  }, [userData]);
+
+  // 회원가입 처리
+  const handleRegister = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
+
     try {
-      await addPost({
-        variables: formData,
+      const { data } = await register({
+        variables: {
+          email: authForm.email,
+          username: authForm.username,
+          password: authForm.password,
+        },
       });
-      setFormData({ title: "", content: "", author: "" });
-      setShowForm(false);
-      refetch();
-    } catch (err) {
-      console.error("Error adding post:", err);
-    }
-  };
 
-  const handleDelete = async (id: string) => {
-    if (confirm("정말 삭제하시겠습니까?")) {
-      try {
-        await deletePost({ variables: { id } });
-        refetch();
-      } catch (err) {
-        console.error("Error deleting post:", err);
+      if (data.register.success) {
+        alert(data.register.message);
+        setAuthForm({ email: "", username: "", password: "" });
+        setShowAuthForm(false);
+        setAuthMode("login");
+      } else {
+        alert(data.register.message);
       }
+    } catch (error) {
+      const errorMessage =
+        error instanceof Error ? error.message : "회원가입에 실패했습니다.";
+      alert(errorMessage);
     }
   };
 
-  if (loading) return <div className="loading">로딩 중...</div>;
-  if (error) return <div className="error">에러: {error.message}</div>;
+  // 로그인 처리
+  const handleLogin = async (e: React.FormEvent<HTMLFormElement>) => {
+    e.preventDefault();
+
+    try {
+      const { data } = await login({
+        variables: {
+          email: authForm.email,
+          password: authForm.password,
+        },
+      });
+
+      const {
+        accessToken: newAccessToken,
+        refreshToken,
+        user: newUser,
+      } = data.login;
+
+      // 상태 업데이트
+      setAccessToken(newAccessToken);
+      setUser(newUser);
+
+      // 로컬 스토리지 저장
+      localStorage.setItem("accessToken", newAccessToken);
+      localStorage.setItem("refreshToken", refreshToken);
+      localStorage.setItem("user", JSON.stringify(newUser));
+
+      // 폼 초기화
+      setAuthForm({ email: "", username: "", password: "" });
+      setShowAuthForm(false);
+
+      // 사용자 정보 다시 가져오기
+      setTimeout(() => {
+        refetchUser();
+      }, 100);
+    } catch (error) {
+      const errorMessage =
+        error instanceof Error ? error.message : "로그인에 실패했습니다.";
+      alert(errorMessage);
+    }
+  };
+
+  // 로그아웃 처리
+  const handleLogout = async () => {
+    try {
+      await logoutMutation();
+    } catch (error) {
+      console.error("로그아웃 API 호출 실패:", error);
+    } finally {
+      // 로컬 상태 초기화
+      setUser(null);
+      setAccessToken("");
+
+      // 로컬 스토리지 정리
+      localStorage.removeItem("accessToken");
+      localStorage.removeItem("refreshToken");
+      localStorage.removeItem("user");
+    }
+  };
+
+  // 게시글 작성
+  const handleCreatePost = async (e: React.FormEvent<HTMLFormElement>) => {
+    e.preventDefault();
+
+    if (!postForm.title.trim() || !postForm.content.trim()) {
+      alert("제목과 내용을 모두 입력해주세요.");
+      return;
+    }
+
+    if (!accessToken) {
+      alert("로그인이 필요합니다.");
+      return;
+    }
+
+    try {
+      await createPostMutation({
+        variables: {
+          title: postForm.title.trim(),
+          content: postForm.content.trim(),
+        },
+      });
+
+      // 성공 시 폼 초기화 및 게시글 목록 새로고침
+      setPostForm({ title: "", content: "" });
+      setShowPostForm(false);
+      refetchPosts();
+    } catch (error) {
+      console.error("게시글 작성 오류:", error);
+      const errorMessage =
+        error instanceof Error ? error.message : "게시글 작성에 실패했습니다.";
+      alert(errorMessage);
+    }
+  };
+
+  // 게시글 삭제
+  const handleDeletePost = async (postId: string) => {
+    if (!confirm("정말 삭제하시겠습니까?")) return;
+
+    try {
+      await deletePostMutation({
+        variables: { id: postId },
+      });
+
+      refetchPosts();
+    } catch (error) {
+      const errorMessage =
+        error instanceof Error ? error.message : "게시글 삭제에 실패했습니다.";
+      alert(errorMessage);
+    }
+  };
 
   return (
     <>
       <div className="app">
+        {/* 헤더 */}
         <header className="header">
           <div className="container">
             <Logo />
-            <button
-              className="btn-primary"
-              onClick={() => setShowForm(!showForm)}
-            >
-              {showForm ? "✕ 취소" : "✏️ 글쓰기"}
-            </button>
+
+            <div className="header-actions">
+              {user ? (
+                <>
+                  <span className="user-info">
+                    안녕하세요, <strong>{user.username}</strong>님!
+                    {!user.isVerified && (
+                      <span className="unverified">⚠️ 미인증</span>
+                    )}
+                  </span>
+                  <button
+                    className="btn btn-primary"
+                    onClick={() => setShowPostForm(!showPostForm)}
+                  >
+                    {showPostForm ? "✕ 취소" : "✏️ 글쓰기"}
+                  </button>
+                  <button className="btn btn-secondary" onClick={handleLogout}>
+                    🚪 로그아웃
+                  </button>
+                </>
+              ) : (
+                <button
+                  className="btn btn-primary"
+                  onClick={() => setShowAuthForm(!showAuthForm)}
+                >
+                  {showAuthForm ? "✕ 닫기" : "🔐 로그인"}
+                </button>
+              )}
+            </div>
           </div>
         </header>
 
+        {/* 메인 콘텐츠 */}
         <main className="main">
-          {showForm && (
-            <div className="form-container">
-              <form onSubmit={handleSubmit} className="post-form">
-                <h3>✍️ 새 글 작성</h3>
+          {/* 인증 폼 */}
+          {showAuthForm && !user && (
+            <div className="auth-section">
+              <div className="auth-tabs">
+                <button
+                  className={`tab ${authMode === "login" ? "active" : ""}`}
+                  onClick={() => setAuthMode("login")}
+                >
+                  로그인
+                </button>
+                <button
+                  className={`tab ${authMode === "register" ? "active" : ""}`}
+                  onClick={() => setAuthMode("register")}
+                >
+                  회원가입
+                </button>
+              </div>
+
+              <form
+                onSubmit={authMode === "login" ? handleLogin : handleRegister}
+                className="auth-form"
+              >
+                <h3>{authMode === "login" ? "🔐 로그인" : "🎉 회원가입"}</h3>
+
                 <div className="form-group">
                   <input
-                    type="text"
-                    placeholder="📝 제목을 입력하세요"
-                    value={formData.title}
+                    type="email"
+                    placeholder="📧 이메일"
+                    value={authForm.email}
                     onChange={(e) =>
-                      setFormData({ ...formData, title: e.target.value })
+                      setAuthForm({ ...authForm, email: e.target.value })
                     }
                     required
                   />
                 </div>
+
+                {authMode === "register" && (
+                  <div className="form-group">
+                    <input
+                      type="text"
+                      placeholder="👤 사용자명"
+                      value={authForm.username}
+                      onChange={(e) =>
+                        setAuthForm({ ...authForm, username: e.target.value })
+                      }
+                      required
+                    />
+                  </div>
+                )}
+
                 <div className="form-group">
                   <input
-                    type="text"
-                    placeholder="👤 작성자 이름"
-                    value={formData.author}
+                    type="password"
+                    placeholder="🔒 비밀번호"
+                    value={authForm.password}
                     onChange={(e) =>
-                      setFormData({ ...formData, author: e.target.value })
+                      setAuthForm({ ...authForm, password: e.target.value })
                     }
                     required
                   />
                 </div>
-                <div className="form-group">
-                  <textarea
-                    placeholder="💭 내용을 입력하세요"
-                    value={formData.content}
-                    onChange={(e) =>
-                      setFormData({ ...formData, content: e.target.value })
-                    }
-                    required
-                  />
-                </div>
-                <button type="submit" className="btn-submit">
-                  🚀 작성하기
+
+                {authMode === "register" && (
+                  <div className="form-help">
+                    <small>
+                      • 비밀번호는 8자 이상, 대소문자와 숫자 포함
+                      <br />• 회원가입 후 이메일 인증이 필요합니다
+                    </small>
+                  </div>
+                )}
+
+                <button
+                  type="submit"
+                  className="btn btn-submit"
+                  disabled={
+                    authMode === "login" ? loginLoading : registerLoading
+                  }
+                >
+                  {authMode === "login"
+                    ? loginLoading
+                      ? "로그인 중..."
+                      : "🚀 로그인"
+                    : registerLoading
+                    ? "가입 중..."
+                    : "✨ 회원가입"}
                 </button>
               </form>
             </div>
           )}
 
-          <div className="posts-container">
+          {/* 게시글 작성 폼 */}
+          {showPostForm && user && user.isVerified && (
+            <div className="post-form-section">
+              <form onSubmit={handleCreatePost} className="post-form">
+                <h3>✍️ 새 글 작성</h3>
+
+                <div className="form-group">
+                  <input
+                    type="text"
+                    placeholder="📝 제목을 입력하세요"
+                    value={postForm.title}
+                    onChange={(e) =>
+                      setPostForm({ ...postForm, title: e.target.value })
+                    }
+                    maxLength={200}
+                    required
+                  />
+                </div>
+
+                <div className="form-group">
+                  <textarea
+                    placeholder="💭 내용을 입력하세요"
+                    value={postForm.content}
+                    onChange={(e) =>
+                      setPostForm({ ...postForm, content: e.target.value })
+                    }
+                    maxLength={10000}
+                    rows={5}
+                    required
+                  />
+                </div>
+
+                <button
+                  type="submit"
+                  className="btn btn-submit"
+                  disabled={createPostLoading}
+                >
+                  {createPostLoading ? "작성 중..." : "🚀 게시글 작성"}
+                </button>
+              </form>
+            </div>
+          )}
+
+          {/* 미인증 사용자 안내 */}
+          {user && !user.isVerified && (
+            <div className="unverified-notice">
+              <h3>⚠️ 이메일 인증이 필요합니다</h3>
+              <p>게시글을 작성하려면 먼저 이메일 인증을 완료해주세요.</p>
+              <p>인증 이메일을 확인하거나, 스팸 폴더를 확인해보세요.</p>
+            </div>
+          )}
+
+          {/* 게시글 목록 */}
+          <div className="posts-section">
             <div className="posts-header">
               <h2>📋 게시글 목록</h2>
               <span className="posts-count">
-                {data?.posts?.length || 0}개의 게시글
+                {postsData?.posts?.length || 0}개의 게시글
               </span>
             </div>
 
-            <div className="posts">
-              {data?.posts?.length === 0 ? (
-                <div className="empty-state">
-                  <div className="empty-icon">📝</div>
-                  <h3>아직 게시글이 없습니다</h3>
-                  <p>첫 번째 게시글을 작성해보세요!</p>
-                </div>
-              ) : (
-                data?.posts?.map((post: any) => (
-                  <div key={post.id} className="post">
-                    <div className="post-header">
-                      <h3 className="post-title">{post.title}</h3>
-                      <button
-                        className="btn-danger"
-                        onClick={() => handleDelete(post.id)}
-                        title="삭제"
-                      >
-                        🗑️
-                      </button>
-                    </div>
-                    <div className="post-meta">
-                      <span className="author">👤 {post.author}</span>
-                      <span className="date">
-                        🕐 {new Date(post.createdAt).toLocaleString("ko-KR")}
-                      </span>
-                    </div>
-                    <p className="post-content">{post.content}</p>
+            {postsLoading ? (
+              <div className="loading">
+                <div className="spinner"></div>
+                <p>게시글을 불러오는 중...</p>
+              </div>
+            ) : (
+              <div className="posts">
+                {postsData?.posts?.length === 0 ? (
+                  <div className="empty-state">
+                    <div className="empty-icon">📝</div>
+                    <h3>아직 게시글이 없습니다</h3>
+                    <p>첫 번째 게시글을 작성해보세요!</p>
                   </div>
-                ))
-              )}
-            </div>
+                ) : (
+                  postsData?.posts?.map((post: Post) => (
+                    <div key={post.id} className="post">
+                      <div className="post-header">
+                        <h3 className="post-title">{post.title}</h3>
+                        {user && user.id === post.authorId && (
+                          <button
+                            className="btn btn-danger btn-small"
+                            onClick={() => handleDeletePost(post.id)}
+                            title="삭제"
+                          >
+                            🗑️
+                          </button>
+                        )}
+                      </div>
+
+                      <div className="post-meta">
+                        <span className="author">👤 {post.authorUsername}</span>
+                        <span className="date">
+                          🕐 {new Date(post.createdAt).toLocaleString("ko-KR")}
+                        </span>
+                      </div>
+
+                      <p className="post-content">{post.content}</p>
+                    </div>
+                  ))
+                )}
+              </div>
+            )}
           </div>
         </main>
       </div>
@@ -239,6 +645,7 @@ function PostList() {
           min-height: 100vh;
         }
 
+        /* 헤더 스타일 */
         .header {
           background: rgba(255, 255, 255, 0.95);
           backdrop-filter: blur(10px);
@@ -274,81 +681,144 @@ function PostList() {
           background-clip: text;
         }
 
+        .header-actions {
+          display: flex;
+          align-items: center;
+          gap: 1rem;
+        }
+
+        .user-info {
+          color: #333;
+          font-size: 0.9rem;
+        }
+
+        .unverified {
+          color: #f39c12;
+          font-size: 0.8rem;
+          margin-left: 0.5rem;
+        }
+
+        /* 메인 콘텐츠 */
         .main {
           max-width: 800px;
           margin: 0 auto;
           padding: 2rem;
         }
 
-        .btn-primary {
-          background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-          color: white;
+        /* 버튼 스타일 */
+        .btn {
           border: none;
-          padding: 12px 24px;
-          border-radius: 25px;
+          padding: 10px 20px;
+          border-radius: 20px;
           cursor: pointer;
           font-weight: 600;
           font-size: 14px;
           transition: all 0.3s ease;
+          text-decoration: none;
+          display: inline-block;
+        }
+
+        .btn-primary {
+          background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+          color: white;
           box-shadow: 0 4px 15px rgba(102, 126, 234, 0.3);
         }
 
-        .btn-primary:hover {
-          transform: translateY(-2px);
-          box-shadow: 0 6px 20px rgba(102, 126, 234, 0.4);
+        .btn-secondary {
+          background: linear-gradient(135deg, #6c757d 0%, #5a6268 100%);
+          color: white;
+          box-shadow: 0 4px 15px rgba(108, 117, 125, 0.3);
         }
 
         .btn-danger {
           background: linear-gradient(135deg, #ff6b6b 0%, #ee5a52 100%);
           color: white;
-          border: none;
-          padding: 8px 12px;
-          border-radius: 20px;
-          cursor: pointer;
-          font-size: 14px;
-          transition: all 0.3s ease;
           box-shadow: 0 2px 10px rgba(255, 107, 107, 0.3);
         }
 
-        .btn-danger:hover {
-          transform: translateY(-1px);
-          box-shadow: 0 4px 15px rgba(255, 107, 107, 0.4);
+        .btn-submit {
+          background: linear-gradient(135deg, #51cf66 0%, #40c057 100%);
+          color: white;
+          box-shadow: 0 4px 15px rgba(81, 207, 102, 0.3);
+          width: 100%;
+          padding: 12px 24px;
         }
 
-        .form-container {
-          margin-bottom: 2rem;
+        .btn-small {
+          padding: 6px 12px;
+          font-size: 12px;
         }
 
-        .post-form {
+        .btn:hover {
+          transform: translateY(-2px);
+          box-shadow: 0 6px 20px rgba(0, 0, 0, 0.2);
+        }
+
+        .btn:disabled {
+          opacity: 0.6;
+          cursor: not-allowed;
+          transform: none;
+        }
+
+        /* 인증 폼 스타일 */
+        .auth-section {
           background: rgba(255, 255, 255, 0.95);
           backdrop-filter: blur(10px);
-          padding: 2rem;
           border-radius: 20px;
+          padding: 2rem;
+          margin-bottom: 2rem;
           box-shadow: 0 10px 40px rgba(0, 0, 0, 0.1);
           border: 1px solid rgba(255, 255, 255, 0.2);
         }
 
-        .post-form h3 {
+        .auth-tabs {
+          display: flex;
+          margin-bottom: 1.5rem;
+          background: #f8f9fa;
+          border-radius: 10px;
+          padding: 4px;
+        }
+
+        .tab {
+          flex: 1;
+          padding: 10px;
+          border: none;
+          background: transparent;
+          border-radius: 6px;
+          cursor: pointer;
+          transition: all 0.3s ease;
+          font-weight: 500;
+        }
+
+        .tab.active {
+          background: white;
+          color: #667eea;
+          box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+        }
+
+        .auth-form h3 {
           margin-bottom: 1.5rem;
           color: #333;
-          font-size: 1.3rem;
+          text-align: center;
         }
 
         .form-group {
           margin-bottom: 1rem;
         }
 
+        .auth-form input,
         .post-form input,
         .post-form textarea {
           width: 100%;
-          padding: 1rem;
+          padding: 12px;
           border: 2px solid rgba(102, 126, 234, 0.1);
-          border-radius: 12px;
+          border-radius: 10px;
           font-size: 16px;
           transition: all 0.3s ease;
           background: rgba(255, 255, 255, 0.8);
         }
 
+        .auth-form input:focus,
         .post-form input:focus,
         .post-form textarea:focus {
           outline: none;
@@ -357,32 +827,64 @@ function PostList() {
           background: white;
         }
 
+        .form-help {
+          margin-bottom: 1rem;
+          padding: 10px;
+          background: #e3f2fd;
+          border-radius: 6px;
+          border-left: 4px solid #2196f3;
+        }
+
+        .form-help small {
+          color: #1976d2;
+          line-height: 1.4;
+        }
+
+        /* 게시글 폼 스타일 */
+        .post-form-section {
+          background: rgba(255, 255, 255, 0.95);
+          backdrop-filter: blur(10px);
+          border-radius: 20px;
+          padding: 2rem;
+          margin-bottom: 2rem;
+          box-shadow: 0 10px 40px rgba(0, 0, 0, 0.1);
+          border: 1px solid rgba(255, 255, 255, 0.2);
+        }
+
+        .post-form h3 {
+          margin-bottom: 1.5rem;
+          color: #333;
+          text-align: center;
+        }
+
         .post-form textarea {
-          height: 120px;
           resize: vertical;
+          min-height: 120px;
           font-family: inherit;
         }
 
-        .btn-submit {
-          background: linear-gradient(135deg, #51cf66 0%, #40c057 100%);
-          color: white;
-          border: none;
-          padding: 12px 32px;
-          border-radius: 25px;
-          cursor: pointer;
-          font-weight: 600;
-          font-size: 16px;
-          transition: all 0.3s ease;
-          box-shadow: 0 4px 15px rgba(81, 207, 102, 0.3);
-          width: 100%;
+        /* 미인증 안내 */
+        .unverified-notice {
+          background: linear-gradient(135deg, #fff3cd 0%, #ffeaa7 100%);
+          border: 1px solid #ffc107;
+          border-radius: 15px;
+          padding: 2rem;
+          text-align: center;
+          margin-bottom: 2rem;
         }
 
-        .btn-submit:hover {
-          transform: translateY(-2px);
-          box-shadow: 0 6px 20px rgba(81, 207, 102, 0.4);
+        .unverified-notice h3 {
+          color: #856404;
+          margin-bottom: 1rem;
         }
 
-        .posts-container {
+        .unverified-notice p {
+          color: #856404;
+          margin: 0.5rem 0;
+        }
+
+        /* 게시글 목록 스타일 */
+        .posts-section {
           margin-top: 2rem;
         }
 
@@ -458,8 +960,10 @@ function PostList() {
           color: #555;
           line-height: 1.6;
           font-size: 1rem;
+          white-space: pre-wrap;
         }
 
+        /* 빈 상태 및 로딩 */
         .empty-state {
           text-align: center;
           padding: 4rem 2rem;
@@ -484,40 +988,57 @@ function PostList() {
           color: #666;
         }
 
-        .loading,
-        .error {
+        .loading {
           text-align: center;
           padding: 2rem;
           background: rgba(255, 255, 255, 0.9);
           backdrop-filter: blur(10px);
           border-radius: 16px;
-          margin: 2rem 0;
         }
 
-        .error {
-          color: #ff6b6b;
-          border: 2px solid rgba(255, 107, 107, 0.2);
+        .spinner {
+          width: 40px;
+          height: 40px;
+          border: 4px solid rgba(102, 126, 234, 0.1);
+          border-left: 4px solid #667eea;
+          border-radius: 50%;
+          animation: spin 1s linear infinite;
+          margin: 0 auto 1rem;
         }
 
-        .loading {
-          color: #667eea;
+        @keyframes spin {
+          0% {
+            transform: rotate(0deg);
+          }
+          100% {
+            transform: rotate(360deg);
+          }
         }
 
+        /* 반응형 디자인 */
         @media (max-width: 768px) {
           .header .container {
             padding: 1rem;
+            flex-direction: column;
+            gap: 1rem;
           }
 
           .main {
             padding: 1rem;
           }
 
-          .logo {
-            font-size: 1.2rem;
+          .header-actions {
+            flex-direction: column;
+            gap: 0.5rem;
+            width: 100%;
           }
 
-          .post-form {
-            padding: 1.5rem;
+          .user-info {
+            text-align: center;
+          }
+
+          .auth-tabs {
+            flex-direction: column;
           }
 
           .posts-header {
@@ -530,16 +1051,18 @@ function PostList() {
             flex-direction: column;
             gap: 0.5rem;
           }
+
+          .post-header {
+            flex-direction: column;
+            align-items: flex-start;
+          }
         }
       `}</style>
     </>
   );
 }
 
+// 최상위 앱 컴포넌트
 export default function Home() {
-  return (
-    <ApolloProvider client={client}>
-      <PostList />
-    </ApolloProvider>
-  );
+  return <BoardApp />;
 }
