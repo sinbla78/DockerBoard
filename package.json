@@ -1,28 +1,37 @@
 {
-    "name": "simple-board",
-    "version": "1.0.0",
-    "private": true,
-    "scripts": {
-      "dev": "next dev",
-      "build": "next build",
-      "start": "next start",
-      "lint": "next lint"
-    },
-    "dependencies": {
-      "next": "14.0.0",
-      "react": "^18.2.0",
-      "react-dom": "^18.2.0",
-      "graphql": "^16.8.1",
-      "apollo-server-micro": "^3.12.2",
-      "@apollo/client": "^3.8.7",
-      "graphql-tag": "^2.12.6",
-      "sqlite3": "^5.1.6",
-      "sqlite": "^5.1.1"
-    },
-    "devDependencies": {
-      "@types/node": "^20.8.10",
-      "@types/react": "^18.2.37",
-      "@types/react-dom": "^18.2.15",
-      "typescript": "^5.2.2"
-    }
+  "name": "board-auth-system",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "lint": "next lint"
+  },
+  "dependencies": {
+    "next": "14.0.0",
+    "react": "^18.2.0",
+    "react-dom": "^18.2.0",
+    "graphql": "^16.8.1",
+    "apollo-server-micro": "^3.12.2",
+    "@apollo/client": "^3.8.7",
+    "graphql-tag": "^2.12.6",
+    "sqlite3": "^5.1.6",
+    "sqlite": "^5.1.1",
+    "bcryptjs": "^2.4.3",
+    "jsonwebtoken": "^9.0.2",
+    "nodemailer": "^6.9.7",
+    "uuid": "^9.0.1"
+  },
+  "devDependencies": {
+    "@types/node": "^20.8.10",
+    "@types/react": "^18.2.37",
+    "@types/react-dom": "^18.2.15",
+    "@types/sqlite3": "^3.1.11",
+    "@types/bcryptjs": "^2.4.6",
+    "@types/jsonwebtoken": "^9.0.5",
+    "@types/nodemailer": "^6.4.14",
+    "@types/uuid": "^9.0.7",
+    "typescript": "^5.2.2"
   }
+}
