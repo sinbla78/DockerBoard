@@ -429,30 +429,66 @@ const resolvers = {
   },
 };
 
+// 개발/프로덕션 환경 확인
+const isDevelopment = process.env.NODE_ENV === 'development';
+
 // Apollo Server 설정
 const apolloServer = new ApolloServer({
   typeDefs,
   resolvers,
-  introspection: true,
-  debug: false, // 프로덕션에서 디버그 정보 숨기기
+  introspection: true, // 스키마 검사 활성화 (Playground에 필요)
+  
+  // 개발 환경에서만 Playground와 디버그 활성화
+  ...(isDevelopment && {
+    playground: {
+      settings: {
+        'request.credentials': 'include', // 쿠키 포함
+        'schema.polling.enable': false,   // 스키마 폴링 비활성화
+      },
+    },
+    debug: true,
+  }),
+  
+  // 프로덕션에서는 디버그 비활성화
+  ...(!isDevelopment && {
+    playground: false,
+    debug: false,
+  }),
+
   logger: {
-    debug: () => {},
-    info: () => {},
+    debug: isDevelopment ? console.debug : () => {},
+    info: isDevelopment ? console.info : () => {},
     warn: console.warn,
     error: console.error,
   },
+  
   context: ({ req, res }) => ({
     req,
     res,
   }),
+  
   formatError: (error) => {
     console.error("GraphQL 오류:", error.message);
+    
+    // 개발 환경에서는 상세한 오류 정보 제공
+    if (isDevelopment) {
+      return {
+        message: error.message,
+        code: error.extensions?.code,
+        path: error.path,
+        locations: error.locations,
+        extensions: error.extensions,
+      };
+    }
+    
+    // 프로덕션에서는 간단한 오류 정보만 제공
     return {
       message: error.message,
       code: error.extensions?.code,
       path: error.path,
     };
   },
+  
   // 민감한 정보 로깅 방지
   formatResponse: (response, { request }) => {
     // 비밀번호가 포함된 요청의 변수를 마스킹
@@ -472,6 +508,7 @@ const apolloServer = new ApolloServer({
     }
     return response;
   },
+  
   // 플러그인으로 요청 로깅 제어
   plugins: [
     {
@@ -512,8 +549,10 @@ const apolloServer = new ApolloServer({
             }
           },
           async didResolveOperation(requestContext) {
-            // 로그에서 민감한 정보 필터링 - 완전히 비활성화
-            // console.log는 제거하여 로깅 자체를 막음
+            // 개발 환경에서만 쿼리 로깅
+            if (isDevelopment && requestContext.request.operationName) {
+              console.log(`GraphQL Operation: ${requestContext.request.operationName}`);
+            }
           },
         };
       },
@@ -530,10 +569,17 @@ export default async function handler(
 ) {
   // CORS 설정
   res.setHeader("Access-Control-Allow-Credentials", "true");
-  res.setHeader("Access-Control-Allow-Origin", "*");
+  res.setHeader(
+    "Access-Control-Allow-Origin", 
+    isDevelopment ? "*" : process.env.ALLOWED_ORIGINS || "*"
+  );
   res.setHeader(
     "Access-Control-Allow-Headers",
     "Origin, X-Requested-With, Content-Type, Accept, Authorization"
+  );
+  res.setHeader(
+    "Access-Control-Allow-Methods",
+    "GET, POST, OPTIONS"
   );
 
   if (req.method === "OPTIONS") {
